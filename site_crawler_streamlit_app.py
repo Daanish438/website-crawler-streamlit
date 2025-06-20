@@ -20,14 +20,24 @@ results = []
 
 def is_valid_page_link(link, base_domain):
     parsed = urlparse(link)
+
+    # Skip if fragment (#...) is present in path, params, or fragment
+    if "#" in parsed.path or "#" in parsed.params or "#" in parsed.fragment or "#" in link:
+        return False
+
+    # Skip assets
+    if any(link.lower().endswith(ext) for ext in [
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".pdf",
+        ".doc", ".docx", ".ppt", ".pptx", ".mp4", ".mov", ".avi", ".zip", ".rar"
+    ]):
+        return False
+
+    # Basic checks
     if parsed.scheme not in ["http", "https"]:
         return False
     if not parsed.netloc or base_domain not in parsed.netloc:
         return False
-    if any(link.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".mp4", ".mov", ".avi", ".zip", ".rar"]):
-        return False
-    if "#" in parsed.path or "#" in parsed.fragment:
-        return False
+
     return True
 
 def crawl(url, base_url, depth=0, max_depth=2):
@@ -45,7 +55,7 @@ def crawl(url, base_url, depth=0, max_depth=2):
             full_url = urljoin(base_url, href)
             if is_valid_page_link(full_url, urlparse(base_url).netloc):
                 crawl(full_url, base_url, depth + 1, max_depth)
-    except Exception as e:
+    except Exception:
         pass
 
 if submit and base_url.strip():
