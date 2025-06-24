@@ -1,10 +1,9 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
 import pandas as pd
 from urllib.parse import urljoin, urlparse
-from datetime import datetime
 from io import BytesIO
+from datetime import datetime
+from playwright.sync_api import sync_playwright
 
 st.set_page_config(page_title="Website Navigation Crawler", page_icon="🌐", layout="centered")
 
@@ -18,61 +17,52 @@ submit = st.button("Generate Sitemap")
 visited = set()
 results = []
 
-def is_valid_page_link(link, base_domain):
-    parsed = urlparse(link)
-
-    # Skip if fragment (#...) is present in path, params, or fragment
-    if "#" in parsed.path or "#" in parsed.params or "#" in parsed.fragment or "#" in link:
+def is_valid_page_link(href, base_url):
+    if not href or href.startswith(("mailto:", "tel:", "javascript:", "#")):
         return False
-
-    # Skip assets
-    if any(link.lower().endswith(ext) for ext in [
-        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".pdf",
-        ".doc", ".docx", ".ppt", ".pptx", ".mp4", ".mov", ".avi", ".zip", ".rar"
-    ]):
+    parsed_href = urlparse(href)
+    if any(parsed_href.path.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".mp4", ".avi", ".mov", ".wmv", ".zip", ".rar", ".exe"]):
         return False
+    full_url = urljoin(base_url, href)
+    parsed_base = urlparse(base_url)
+    parsed_full = urlparse(full_url)
+    return parsed_base.netloc == parsed_full.netloc
 
-    # Basic checks
-    if parsed.scheme not in ["http", "https"]:
-        return False
-    if not parsed.netloc or base_domain not in parsed.netloc:
-        return False
-
-    return True
-
-def crawl(url, base_url, depth=0, max_depth=2):
+def crawl(page, url, base_url, depth, max_depth):
     if depth > max_depth or url in visited:
         return
     try:
-        response = requests.get(url, timeout=10)
+        page.goto(url)
+        st.session_state['status'] = f"Crawling: {url}"
         visited.add(url)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        title = soup.title.string.strip() if soup.title and soup.title.string else 'No title'
-        results.append({'Navigation': title, 'URL': url})
-
-        for link in soup.find_all('a', href=True):
-            href = link['href']
-            full_url = urljoin(base_url, href)
-            if is_valid_page_link(full_url, urlparse(base_url).netloc):
-                crawl(full_url, base_url, depth + 1, max_depth)
-    except Exception:
+        title = page.title()
+        results.append({'Navigation': title.strip() if title else 'No title', 'URL': url})
+        anchors = page.locator("a")
+        hrefs = anchors.evaluate_all("nodes => nodes.map(n => n.href)")
+        for href in hrefs:
+            if is_valid_page_link(href, base_url):
+                crawl(page, href, base_url, depth + 1, max_depth)
+    except Exception as e:
         pass
 
 if submit and base_url.strip():
-    parsed_url = urlparse(base_url)
-    if not parsed_url.scheme:
-        st.error("Please enter a valid URL starting with https://")
+    if not urlparse(base_url).scheme:
+        st.error("Please enter a valid URL with https://")
     else:
-        visited.clear()
-        results.clear()
-        with st.status("🔄 Crawling in progress...", expanded=False) as status:
-            crawl(base_url.strip(), base_url.strip(), 0, max_depth)
-            status.update(label="✅ Crawling complete!", state="complete", expanded=False)
+        with st.spinner("Crawling in progress..."):
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context()
+                page = context.new_page()
+                visited.clear()
+                results.clear()
+                crawl(page, base_url.strip(), base_url.strip(), 0, max_depth)
+                browser.close()
 
-        df = pd.DataFrame(results).drop_duplicates()
-        domain = urlparse(base_url).netloc.replace("www.", "")
-        filename = f"{domain}_structure_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        df.to_excel(filename, index=False)
-
-        with open(filename, "rb") as f:
-            st.download_button("📥 Download Excel", f, file_name=filename, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            df = pd.DataFrame(results).drop_duplicates()
+            domain = urlparse(base_url).netloc.replace("www.", "")
+            filename = f"{domain}_structure_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            df.to_excel(filename, index=False)
+            with open(filename, "rb") as f:
+                st.success("✅ Crawling complete!")
+                st.download_button("📥 Download Excel", f, file_name=filename, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
